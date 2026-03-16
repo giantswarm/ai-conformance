@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,6 +13,86 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+const landscapeURL = "https://raw.githubusercontent.com/cncf/landscape/master/landscape.yml"
+
+// LandscapeData represents the top-level structure of the CNCF landscape YAML
+type LandscapeData struct {
+	Landscape []LandscapeCategory `yaml:"landscape"`
+}
+
+// LandscapeCategory represents a category in the CNCF landscape
+type LandscapeCategory struct {
+	Name          string                 `yaml:"name"`
+	Subcategories []LandscapeSubcategory `yaml:"subcategories"`
+}
+
+// LandscapeSubcategory represents a subcategory within a landscape category
+type LandscapeSubcategory struct {
+	Name  string          `yaml:"name"`
+	Items []LandscapeItem `yaml:"items"`
+}
+
+// LandscapeItem represents an individual item/entry in the landscape
+type LandscapeItem struct {
+	Name string `yaml:"name"`
+}
+
+// memberSuffixes are the parenthetical suffixes appended to member names in the landscape
+var memberSuffixes = []string{" (member)", " (supporter)"}
+
+// fetchCNCFMembers fetches the CNCF landscape YAML and returns a set of member
+// names from the "CNCF Members" category. The returned map keys are the member
+// names with the trailing "(member)"/"(supporter)" suffix stripped.
+func fetchCNCFMembers() (map[string]bool, error) {
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Get(landscapeURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch CNCF landscape: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to fetch CNCF landscape: HTTP %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read CNCF landscape response: %v", err)
+	}
+
+	var data LandscapeData
+	if err := yaml.Unmarshal(body, &data); err != nil {
+		return nil, fmt.Errorf("failed to parse CNCF landscape YAML: %v", err)
+	}
+
+	members := make(map[string]bool)
+	found := false
+	for _, category := range data.Landscape {
+		if category.Name == "CNCF Members" {
+			found = true
+			for _, sub := range category.Subcategories {
+				for _, item := range sub.Items {
+					name := item.Name
+					for _, suffix := range memberSuffixes {
+						name = strings.TrimSuffix(name, suffix)
+					}
+					name = strings.TrimSpace(name)
+					if name != "" {
+						members[name] = true
+					}
+				}
+			}
+			break
+		}
+	}
+
+	if !found {
+		return nil, fmt.Errorf("could not find 'CNCF Members' category in landscape data")
+	}
+
+	return members, nil
+}
 
 // Requirement represents a single checklist item
 type Requirement struct {
@@ -61,9 +142,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Fetch CNCF member list once for all validations
+	fmt.Println("Fetching CNCF member list from landscape...")
+	cncfMembers, err := fetchCNCFMembers()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Loaded %d CNCF members from landscape.\n", len(cncfMembers))
+
 	success := true
 	for _, path := range os.Args[1:] {
-		if !validateProduct(path) {
+		if !validateProduct(path, cncfMembers) {
 			success = false
 		}
 	}
@@ -73,7 +163,7 @@ func main() {
 	}
 }
 
-func validateProduct(path string) bool {
+func validateProduct(path string, cncfMembers map[string]bool) bool {
 	fmt.Printf("Validating %s...\n", path)
 
 	// Extract version
@@ -171,6 +261,20 @@ func validateProduct(path string) bool {
 					}
 				}(strVal, field)
 			}
+		}
+	}
+
+	// Validate CNCF Membership
+	if product.Metadata != nil {
+		vendorName := ""
+		if v, ok := product.Metadata["vendorName"]; ok {
+			vendorName, _ = v.(string)
+		} else if v, ok := product.Metadata["vendor_name"]; ok {
+			vendorName, _ = v.(string)
+		}
+		vendorName = strings.TrimSpace(vendorName)
+		if vendorName != "" && !cncfMembers[vendorName] {
+			addError(fmt.Sprintf("vendorName '%s' does not match any CNCF member in the CNCF Landscape. The vendorName must exactly match the organization name listed at https://landscape.cncf.io/members", vendorName))
 		}
 	}
 
