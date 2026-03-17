@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -499,7 +500,7 @@ func TestInsertNewEntry_SubcategoryNotFound(t *testing.T) {
 }
 
 func TestDownloadLogo_BadURL(t *testing.T) {
-	err := downloadLogo("http://127.0.0.1:1/nonexistent", "/tmp/test-logo-bad.svg")
+	err := downloadLogo("http://127.0.0.1:1/nonexistent", filepath.Join(t.TempDir(), "test-logo-bad.svg"))
 	if err == nil {
 		t.Fatal("expected error for bad URL")
 	}
@@ -535,6 +536,57 @@ func TestDownloadLogo_Success(t *testing.T) {
 	}
 	if string(data) != "<svg>test</svg>" {
 		t.Errorf("file content = %q, want %q", string(data), "<svg>test</svg>")
+	}
+}
+
+func TestDownloadLogo_InvalidScheme(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{"file scheme", "file:///etc/passwd"},
+		{"ftp scheme", "ftp://example.com/logo.svg"},
+		{"no scheme", "://example.com/logo.svg"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := downloadLogo(tc.url, filepath.Join(t.TempDir(), "logo.svg"))
+			if err == nil {
+				t.Fatal("expected error for invalid scheme")
+			}
+			if !strings.Contains(err.Error(), "scheme") {
+				t.Errorf("error should mention scheme, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestDownloadLogo_OversizedFile(t *testing.T) {
+	// Create a test server that returns a response larger than maxLogoSize
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Write slightly more than maxLogoSize (10MB + 1KB)
+		w.WriteHeader(200)
+		buf := make([]byte, 1024)
+		for i := range buf {
+			buf[i] = 'x'
+		}
+		for written := 0; written <= maxLogoSize; written += len(buf) {
+			w.Write(buf)
+		}
+	}))
+	defer ts.Close()
+
+	destPath := filepath.Join(t.TempDir(), "oversized.svg")
+	err := downloadLogo(ts.URL, destPath)
+	if err == nil {
+		t.Fatal("expected error for oversized file")
+	}
+	if !strings.Contains(err.Error(), "exceeds maximum size") {
+		t.Errorf("error should mention size limit, got: %v", err)
+	}
+	// File should have been cleaned up
+	if _, err := os.Stat(destPath); err == nil {
+		t.Error("oversized file should have been removed")
 	}
 }
 

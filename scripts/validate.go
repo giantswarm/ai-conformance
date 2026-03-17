@@ -140,7 +140,7 @@ var metadataFields = map[string]bool{
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run scripts/validate.go <path_to_product.yaml> ...")
+		fmt.Println("Usage: go run -tags validate scripts/validate.go <path_to_product.yaml> ...")
 		os.Exit(1)
 	}
 

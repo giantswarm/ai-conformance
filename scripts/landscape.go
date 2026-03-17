@@ -379,9 +379,21 @@ func insertNewEntry(data []byte, meta *ProductMeta, logoFilename string) ([]byte
 	return nil, fmt.Errorf("could not find items list for 'Certified Kubernetes - AI Platform' subcategory")
 }
 
+// maxLogoSize is the maximum allowed logo download size (10 MB).
+const maxLogoSize = 10 << 20
+
 // downloadLogo fetches a logo from a URL and writes it to destPath.
-// Returns an error on HTTP 4xx/5xx responses.
+// Only http and https schemes are allowed. Downloads are capped at maxLogoSize.
+// Returns an error on invalid schemes, HTTP 4xx/5xx responses, or oversized files.
 func downloadLogo(logoURL, destPath string) error {
+	parsed, err := url.Parse(logoURL)
+	if err != nil {
+		return fmt.Errorf("invalid logo URL %q: %w", logoURL, err)
+	}
+	if parsed.Scheme != "https" && parsed.Scheme != "http" {
+		return fmt.Errorf("logo URL must use http or https scheme, got %q", parsed.Scheme)
+	}
+
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Get(logoURL)
 	if err != nil {
@@ -398,10 +410,17 @@ func downloadLogo(logoURL, destPath string) error {
 		return fmt.Errorf("creating logo file %s: %w", destPath, err)
 	}
 
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	limited := io.LimitReader(resp.Body, maxLogoSize+1)
+	n, err := io.Copy(f, limited)
+	if err != nil {
 		f.Close()
 		os.Remove(destPath)
 		return fmt.Errorf("writing logo to %s: %w", destPath, err)
+	}
+	if n > maxLogoSize {
+		f.Close()
+		os.Remove(destPath)
+		return fmt.Errorf("logo from %s exceeds maximum size of %d bytes", logoURL, maxLogoSize)
 	}
 
 	return f.Close()
