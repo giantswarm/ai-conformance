@@ -10,13 +10,14 @@ metadata:
   vendorName: "Alauda"
   websiteUrl: "https://www.alauda.io/products/acp"
   documentationUrl: "https://docs.alauda.io/container_platform/4.2/"
-  productLogoUrl: "https://www.alauda.io/hubfs/alauda_io_H_Blue.svg"
+  productLogoUrl: "https://www.alauda.cn/Upload/image/202603/1773901762698439.png"
   description: >
     Alauda Container Platform (ACP) is an enterprise-grade cloud-native platform
     designed to accelerate digital transformation. Built on Kubernetes, ACP automates
     the management of diverse and dynamic infrastructures and supports modern
     application development and operations.
   contactEmailAddress: "xlzhao@alauda.io"
+  k8sConformanceUrl: "https://github.com/cncf/k8s-conformance/tree/master/v1.33/alauda"
 
 spec:
   accelerators:
