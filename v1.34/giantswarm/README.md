@@ -58,7 +58,7 @@ kubectl gs template app \
   --name gpu-operator \
   --cluster-name $CLUSTER \
   --target-namespace kube-system \
-  --version 1.0.1 \
+  --version 1.3.0 \
   --organization $ORGANIZATION | kubectl apply -f -
 ```
 
