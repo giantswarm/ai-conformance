@@ -159,7 +159,7 @@ kubectl gs template app \
   --name aws-efs-csi-driver \
   --cluster-name $CLUSTER \
   --target-namespace kube-system \
-  --version 2.1.5 \
+  --version 3.3.0 \
   --organization $ORGANIZATION | kubectl apply -f -
 ```
 
