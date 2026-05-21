@@ -110,7 +110,7 @@ kubectl gs template app \
   --name kuberay-operator \
   --cluster-name $CLUSTER \
   --target-namespace kube-system \
-  --version 1.0.0 \
+  --version 1.1.0 \
   --organization $ORGANIZATION | kubectl apply -f -
 ```
 
@@ -128,7 +128,7 @@ kubectl gs template app \
   --organization=ORGANIZATION \
   --name=kueue \
   --target-namespace=kueue-system \
-  --version=0.1.0 | kubectl apply -f -
+  --version=0.2.0 | kubectl apply -f -
 ```
 
 ## 5. Gateway API
@@ -143,7 +143,7 @@ kubectl gs template app \
   --name gateway-api-bundle \
   --cluster-name $CLUSTER \
   --target-namespace kube-system \
-  --version 0.5.1 \
+  --version 1.15.1 \
   --organization $ORGANIZATION | kubectl apply -f -
 ```
 
@@ -181,7 +181,7 @@ spec:
   chart:
     spec:
       chart: oci://registry.k8s.io/jobset/charts/jobset
-      version: "0.10.1"
+      version: "0.12.0"
   targetNamespace: kube-system
   kubeConfig:
     secretRef:
@@ -203,7 +203,7 @@ kubectl gs template app \
   --org $ORGANIZATION \
   --name=keda \
   --target-namespace=keda-system \
-  --version=3.1.0 | kubectl apply -f -
+  --version=5.0.2 | kubectl apply -f -
 ```
 
 ## 10. Sonobuoy Configuration
