@@ -23,23 +23,28 @@ global:
   nodePools:
     nodepool0:
       instanceType: m5.xlarge
-      maxSize: 2
-      minSize: 1
-      rootVolumeSizeGB: 8
+      maxSize: 3
+      minSize: 2
+      rootVolumeSizeGB: 50
+    # The isolation test allocates one device per Pod and DRA never
+    # double-allocates, so the GPU instance needs at least two GPUs.
+    # g4dn.12xlarge is 4 x Tesla T4 / 48 vCPU, which fits a default 64 vCPU
+    # G/VT quota. 100 GB root volume because the CUDA images are large.
     nodepool1:
-      instanceType: p4d.24xlarge
-      maxSize: 2
+      instanceType: g4dn.12xlarge
+      maxSize: 1
       minSize: 1
-      rootVolumeSizeGB: 15
+      rootVolumeSizeGB: 100
       instanceWarmup: 600
       minHealthyPercentage: 90
       customNodeTaints:
       - key: "nvidia.com/gpu"
         value: "Exists"
         effect: "NoSchedule"
-  providerSpecific: {}
+  providerSpecific:
+    region: eu-north-1
   release:
-    version: 35.0.1
+    version: 35.1.1
 ```
 
 # AI platform components
@@ -52,13 +57,32 @@ The following components should be installed to complete the AI setup:
 
 **Installation via Giant Swarm App Platform**:
 
+Version 1.4.0 or newer is required. Earlier versions cannot find Flatcar's
+`nvidia-smi`, which lives in `/opt/bin`, so `nvidia-operator-validator` fails and
+leaves the device plugin, GFD and DCGM in `Init`; GPU Feature Discovery also had no
+`CiliumNetworkPolicy` and so never published the `nvidia.com/gpu.*` node labels.
+
+The standard device plugin is disabled because this submission allocates GPUs through
+DRA. The two cannot claim the same device until KEP 5004 reaches GA.
+
 ```sh
+cat > gpu-operator-values.yaml <<EOF
+gpu-operator:
+  devicePlugin:
+    enabled: false
+EOF
+
+kubectl create configmap gpu-operator-user-values \
+  --from-file=values=gpu-operator-values.yaml \
+  --namespace=org-$ORGANIZATION
+
 kubectl gs template app \
   --catalog giantswarm \
   --name gpu-operator \
   --cluster-name $CLUSTER \
+  --user-configmap=gpu-operator-user-values \
   --target-namespace kube-system \
-  --version 1.3.0 \
+  --version 1.4.1 \
   --organization $ORGANIZATION | kubectl apply -f -
 ```
 
@@ -80,7 +104,16 @@ kubeletPlugin:
     effect: "NoSchedule"
 resources:
   gpus:
+    enabled: true
+  # Compute domains need nvidia-caps-imex-channels, which T4 and A10G class
+  # GPUs do not have. Left on, the plugin crashes with
+  # "error getting nvcap for IMEX channel '0'".
+  computeDomains:
     enabled: false
+# The chart refuses to render with resources.gpus.enabled=true unless this is
+# set too, a deliberate guard against running alongside the standard device
+# plugin until KEP 5004 is GA. The device plugin is disabled above.
+gpuResourcesEnabledOverride: true
 EOF
 
 kubectl create configmap dra-driver-nvidia-gpu-user-values \
@@ -95,7 +128,7 @@ kubectl gs template app \
   --app-name=dra-driver-nvidia-gpu \
   --user-configmap=dra-driver-nvidia-gpu-user-values \
   --target-namespace=kube-system \
-  --version=25.3.2-flatcar.1 | kubectl apply -f -
+  --version=26.0.0 | kubectl apply -f -
 ```
 
 ## 3. Kuberay Operator
@@ -110,7 +143,7 @@ kubectl gs template app \
   --name kuberay-operator \
   --cluster-name $CLUSTER \
   --target-namespace kube-system \
-  --version 1.1.0 \
+  --version 1.2.1 \
   --organization $ORGANIZATION | kubectl apply -f -
 ```
 
@@ -127,7 +160,7 @@ kubectl gs template app \
   --organization=$ORGANIZATION \
   --name=kueue \
   --target-namespace=kueue-system \
-  --version=0.2.0 | kubectl apply -f -
+  --version=0.5.0 | kubectl apply -f -
 ```
 
 ## 5. Gateway API

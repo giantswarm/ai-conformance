@@ -5,7 +5,7 @@
 metadata:
   kubernetesVersion: v1.35
   platformName: Giant Swarm Platform
-  platformVersion: 35.0.1
+  platformVersion: 35.1.1
   vendorName: Giant Swarm
   websiteUrl: https://www.giantswarm.io/
   repoUrl: https://github.com/giantswarm
@@ -31,13 +31,14 @@ spec:
       evidence:
         - "https://docs.giantswarm.io/tutorials/fleet-management/cluster-management/gpu/"
         - "https://docs.giantswarm.io/tutorials/fleet-management/cluster-management/dynamic-resource-allocation/"
-      notes: "The NVIDIA driver and container toolkit are shipped in the Flatcar node image maintained by Giant Swarm, so they are version-matched to the release. The GPU Operator app installs the device plugin, Node Feature Discovery, GPU Feature Discovery and the nvidia-operator-validator, which verifies driver and runtime health on every GPU node; the documented runtimeClassName nvidia selects the configured container runtime. Driver and runtime versions are not yet surfaced through DRA ResourceSlice attributes."
+      notes: "The NVIDIA driver and container toolkit ship in the Flatcar node image and are pinned by the Giant Swarm release. The GPU Operator app installs the device plugin, Node Feature Discovery, GPU Feature Discovery and nvidia-operator-validator, which checks driver and runtime health on every GPU node. The DRA driver publishes driver and CUDA runtime versions as ResourceSlice device attributes (driverVersion, cudaDriverVersion), alongside architecture, brand, cudaComputeCapability and productName."
     - id: gpu_sharing
       description: "For accelerators that support static GPU sharing, provide well-defined mechanisms for at least one GPU sharing strategy to improve utilization for workloads that do not require a full dedicated GPU. If hardware-level partitioning is supported, then these fractional GPU resources should be exposed as schedulable resources. If software-based sharing (e.g. time-slicing) is supported, then oversubscription of GPUs should be allowed. Forward-looking: Once the accelerator supports static GPU sharing as part of DRA, the platform should expose the DRA mechanism to allow users to leverage static GPU sharing. Once the accelerator supports dynamic GPU sharing as part of DRA and the partitionable devices feature is GA, the platform should expose the DRA mechanism to allow users to leverage dynamic GPU sharing."
       level: SHOULD
-      status: ""
-      evidence: []
-      notes: ""
+      status: "Implemented"
+      evidence:
+        - "https://docs.giantswarm.io/tutorials/fleet-management/cluster-management/dynamic-resource-allocation/#share-gpus-between-workloads"
+      notes: "All three mechanisms are exposed through the DRA driver and documented, but each carries a precondition. Time-slicing and MPS are upstream alpha features and are off unless the operator is started with the matching feature gate, TimeSlicingSettings or MPSSupport; neither isolates memory between the workloads that share a device. MIG is schedulable without a feature gate, but requires A100 or H100 class hardware and partitions created outside the DRA driver, so it is unavailable on the T4, A10G and L4 instances most clusters use. Dynamic MIG, where the driver creates and reshapes partitions on demand, is a separate alpha feature (DynamicMIG) and is mutually exclusive with MPSSupport."
     - id: virtualized_accelerator
       description: "For accelerators that support virtualized accelerator technologies (e.g. vGPU), provide well-defined mechanisms for these to be exposed and managed, maintaining consistency with physical fractional GPUs. Forward-looking: Once the accelerator supports virtualized accelerator technologies as part of DRA, then the platform should use the DRA mechanism."
       level: SHOULD
