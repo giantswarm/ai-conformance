@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -153,7 +154,17 @@ var autoTestedRequirements = map[string]string{
 	"secure_accelerator_access": "TestSecureAcceleratorAccess",
 	"gang_scheduling":           "TestGangScheduling",
 	"cluster_autoscaling":       "TestAcceleratorClusterAutoscaling",
+	"ai_service_metrics":        "TestAIServiceMetrics",
+	"robust_controller":         "TestRobustCRDControllerOperation",
+	"driver_runtime_management": "TestAcceleratorDriverRuntimeManagement",
+	"workload_sandboxing":       "TestWorkloadSandboxing",
+	"accelerator_metrics":       "TestAcceleratorPerformanceMetrics",
+	"pod_autoscaling":           "TestHPAAutoscaling",
 }
+
+// upstreamTestSuiteURL is where vendors can request or contribute test support
+// for their platform.
+const upstreamTestSuiteURL = "https://github.com/kubernetes-sigs/ai-conformance"
 
 // conditionalMustRequirements lists the MUST requirements whose condition may
 // not apply to a platform, and which may therefore be marked N/A with a
@@ -552,7 +563,7 @@ func checkArtifactEvidence(ref evidenceRef, kind artifactKind, link, reqID, stat
 		out = append(out, fmt.Sprintf("Test '%s' referenced by '%s' failed in %s", testName, reqID, artifactName))
 	case outcomeSkip:
 		if status == "Implemented" {
-			out = append(out, fmt.Sprintf("Requirement '%s' is Implemented but test '%s' was skipped in %s", reqID, testName, artifactName))
+			out = append(out, fmt.Sprintf("Requirement '%s' is Implemented but test '%s' was skipped in %s. If you verified this requirement manually, cite documentation as evidence instead of the test artifact. If the test does not support your platform yet, please open an issue or PR at %s", reqID, testName, artifactName, upstreamTestSuiteURL))
 		}
 	}
 	return out
@@ -675,7 +686,9 @@ func validateProduct(path string, cncfMembers map[string]bool) bool {
 					wg.Add(1)
 					go func(url, fName string) {
 						defer wg.Done()
-						if err := validateURL(url); err != nil {
+						if err := validateURL(url); isRateLimited(err) {
+							addWarning(fmt.Sprintf("k8sConformanceUrl could not be verified: %s (%v)", url, err))
+						} else if err != nil {
 							addError(fmt.Sprintf("k8sConformanceUrl is not accessible: %s (%v)", url, err))
 						}
 					}(strVal, field)
@@ -684,7 +697,9 @@ func validateProduct(path string, cncfMembers map[string]bool) bool {
 				wg.Add(1)
 				go func(url, fName string) {
 					defer wg.Done()
-					if err := validateURL(url); err != nil {
+					if err := validateURL(url); isRateLimited(err) {
+						addWarning(fmt.Sprintf("URL in metadata %s could not be verified: %s (%v)", fName, url, err))
+					} else if err != nil {
 						addError(fmt.Sprintf("Invalid URL in metadata %s: %s (%v)", fName, url, err))
 					}
 				}(strVal, field)
@@ -756,7 +771,9 @@ func validateProduct(path string, cncfMembers map[string]bool) bool {
 						wg.Add(1)
 						go func(url, reqID string) {
 							defer wg.Done()
-							if err := validateURL(url); err != nil {
+							if err := validateURL(url); isRateLimited(err) {
+								addWarning(fmt.Sprintf("Evidence URL for '%s' could not be verified: %s (%v)", reqID, url, err))
+							} else if err != nil {
 								addError(fmt.Sprintf("Invalid evidence URL for '%s': %s (%v)", reqID, url, err))
 							}
 						}(link, sReq.ID)
@@ -783,7 +800,7 @@ func validateProduct(path string, cncfMembers map[string]bool) bool {
 				}
 
 				if testName, autoTested := autoTestedRequirements[sReq.ID]; autoTested && hybrid && pReq.Status == "Implemented" && !hasArtifact {
-					addWarning(fmt.Sprintf("Requirement '%s' is covered by automated test '%s'; including test artifacts (e2e.log, junit.xml, or results.json) as evidence is recommended for v%s+ submissions", sReq.ID, testName, schemaVersion))
+					addWarning(fmt.Sprintf("Requirement '%s' is covered by automated test '%s'; including test artifacts (e2e.log, junit.xml, or results.json) as evidence is recommended for v%s+ submissions. If the test does not support your platform yet, please open an issue or PR at %s", sReq.ID, testName, schemaVersion, upstreamTestSuiteURL))
 				}
 			}
 		}
@@ -821,27 +838,75 @@ func loadYaml(path string) (*ConformanceDoc, error) {
 	return &doc, err
 }
 
+// errRateLimited is returned when a URL still answers 429 after all retries.
+// Callers report it as a warning: the URL could not be verified, but it is
+// not known to be broken either.
+var errRateLimited = errors.New("rate limited (HTTP 429) after retries")
+
+func isRateLimited(err error) bool { return errors.Is(err, errRateLimited) }
+
+// urlSem bounds the number of concurrent URL checks so we don't trigger
+// rate limits on vendor sites in the first place.
+var urlSem = make(chan struct{}, 8)
+
+var (
+	maxRetries  = 4
+	baseBackoff = 1 * time.Second
+	maxBackoff  = 30 * time.Second
+)
+
 func validateURL(urlStr string) error {
+	urlSem <- struct{}{}
+	defer func() { <-urlSem }()
+
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 	}
 	// Try HEAD first
-	resp, err := doRequest(client, http.MethodHead, urlStr)
+	resp, err := doRequestWithRetry(client, http.MethodHead, urlStr)
 	if err == nil && resp.StatusCode < 400 {
 		resp.Body.Close()
 		return nil
 	}
+	if err == nil {
+		resp.Body.Close()
+	}
 
 	// If HEAD fails or returns error, try GET
-	resp, err = doRequest(client, http.MethodGet, urlStr)
+	resp, err = doRequestWithRetry(client, http.MethodGet, urlStr)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return errRateLimited
+	}
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("status code %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// doRequestWithRetry retries 429 responses with exponential backoff,
+// honouring Retry-After (in seconds) when the server sends it.
+func doRequestWithRetry(client *http.Client, method, url string) (*http.Response, error) {
+	backoff := baseBackoff
+	for attempt := 0; ; attempt++ {
+		resp, err := doRequest(client, method, url)
+		if err != nil || resp.StatusCode != http.StatusTooManyRequests || attempt >= maxRetries {
+			return resp, err
+		}
+		wait := backoff
+		if secs, perr := strconv.Atoi(resp.Header.Get("Retry-After")); perr == nil && secs >= 0 {
+			wait = time.Duration(secs) * time.Second
+		}
+		if wait > maxBackoff {
+			wait = maxBackoff
+		}
+		resp.Body.Close()
+		time.Sleep(wait)
+		backoff *= 2
+	}
 }
 
 // doRequest creates an HTTP request that honestly identifies this validator,
